@@ -2,7 +2,7 @@ defmodule MetricsReporterUI.AppConfigChannel do
 	use Phoenix.Channel
   alias MonitoringHubUtils.Stores.AppConfigStore
 
-  def join("app-config:" <> app_name, _message, socket) do
+  def join("app-config:" <> _app_name, _message, socket) do
     send(self, :after_join)
     {:ok, socket}
   end

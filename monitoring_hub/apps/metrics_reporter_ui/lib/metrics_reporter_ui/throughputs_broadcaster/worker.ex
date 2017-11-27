@@ -7,7 +7,7 @@ defmodule MetricsReporterUI.ThroughputsBroadcaster.Worker do
   alias MonitoringHubUtils.Stores.AppConfigStore
 
   ## Client API
-  def start_link([log_name: log_name, interval_key: interval_key, pipeline_key: pipeline_key, app_name: app_name, category: category] = args) do
+  def start_link([log_name: log_name, interval_key: interval_key, pipeline_key: _pipeline_key, app_name: _app_name, category: _category] = args) do
     {:ok, _pid} = GenServer.start_link(__MODULE__, args, name: via_tuple(log_name, interval_key))
   end
 
@@ -30,9 +30,9 @@ defmodule MetricsReporterUI.ThroughputsBroadcaster.Worker do
       case get_throughput_msgs(log_name, last_msg_ts) do
         [] ->
           :ok
-        [single_throughput_msg] ->
+        [_single_throughput_msg] ->
           :ok
-        [first_throughput_msg, second_throughput_msg] ->
+        [_first_throughput_msg, _second_throughput_msg] ->
           :ok
         throughput_msgs ->
           %{"time" => timestamp} = last_throughput_msg = List.last(throughput_msgs)
@@ -53,15 +53,10 @@ defmodule MetricsReporterUI.ThroughputsBroadcaster.Worker do
       {:noreply, state}
   end
 
-  defp store_throughput_msg(msg_log_name, throughput_msg) do
-    :ok = MessageLog.Supervisor.lookup_or_create(msg_log_name)
-    {:ok, ^throughput_msg} = MessageLog.log_message(msg_log_name, throughput_msg)
-  end
-
   defp get_throughput_msgs(log_name, start_time) do
     :ok = MessageLog.Supervisor.lookup_or_create log_name
     throughput_list = MessageLog.get_logs(log_name, [start_time: start_time + 1])
-    throughput_msgs_without_partial = List.delete_at(throughput_list, -1)
+    _throughput_msgs_without_partial = List.delete_at(throughput_list, -1)
   end
 
   defp store_latest_throughput_msgs(msg_log_name, throughput_msgs) do
@@ -82,13 +77,12 @@ defmodule MetricsReporterUI.ThroughputsBroadcaster.Worker do
     throughput_msg["time"]
   end
 
-
   defp via_tuple(log_name, interval_key) do
     worker_name = generate_worker_name(log_name, interval_key)
     {:via, :gproc, {:n, :l, {:tb_worker, worker_name}}}
   end
 
-  defp message_log_name(app_name, category, pipeline_key, interval_key) do
+  defp message_log_name(_app_name, category, pipeline_key, interval_key) do
     "category:" <> category <>  "::cat-name:" <> pipeline_key <> "::" <> get_event_name(interval_key)
   end
 
