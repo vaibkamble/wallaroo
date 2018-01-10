@@ -1309,4 +1309,9 @@ def pipeline_test(generator, expected, command, workers=1, sources=1,
         # clean up any remaining runner processes
         for r in runners:
             r.stop()
+        # Wait on runners to finish waiting on their subprocesses to exit
+        for r in runners:
+            r.join()
+
+    # Return runner names and outputs if try block didn't have a return
     return [(r.name, r.get_output()) for r in runners]
