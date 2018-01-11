@@ -433,6 +433,12 @@ def CLI():
                                     'error', 'critical'],
                            default='info')
 
+    term_group = parser.add_argument_group('Termination')
+    term_group.add_argument('--runner-join_timeout', type=int, default=30,
+                            help=("Timeout in seconds before killing any "
+                                  "remaining live workers and raising an "
+                                  "error."))
+
     args = parser.parse_args()
     set_log_level(args.log_level)
 
@@ -474,6 +480,7 @@ def CLI():
                                        False),
                       giles_mode = 'giles' if args.giles_mode else None,
                       host=args.host,
+                      runner_join_timeout=args.runner_join_timeout,
                       resilience_dir=args.resilience_dir,
                       spikes=args.spike))
     except Exception as err:
