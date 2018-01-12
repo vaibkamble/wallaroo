@@ -128,7 +128,7 @@ def edge_changes(duration, totals, metrics_ts):
                 # add an 'up' switch at the current ts
                 switches.append((ts, 'up'))
     # Since the last switch is always up, we can always add a 'down' in the
-    # ts that follows it
+    # ts that follows it if enough time has elapsed
     if metrics_ts > switches[-1][0] + duration:
         switches.append((switches[-1][0] + duration, 'down'))
     return switches
@@ -140,13 +140,14 @@ def parse_metrics(metrics):
     mp = MetricsParser()
     mp.load_string_list(metrics.data)
     metrics_ts = int(time.time() * 1e9)
+    print 'metrics_ts:', metrics_ts
     mp.parse()
     # Now confirm that there are computations in each worker's metrics
-    app_key = mp.data.keys()[0]  # 'metrics:Alphabet Poplarity Contest'
+    app_key = mp.data.keys()[0]  # 'metrics:Alphabet Popularity Contest'
     names = mp.data[app_key].keys()  # this includes 'initializer'
     # For each worker, get a metrics duration value, and a list of
     # (end_ts, node_ingress_egress totals) pairs
-    wm = {k: {'total': {}} for k in names}
+    wm = {k: {'total': {}, 'duration': 0} for k in names}
     for w in names:
         for t in mp.data[app_key][w]:
             if (t[0] == 'metrics' and
@@ -162,8 +163,12 @@ def parse_metrics(metrics):
     # Get sequence of edge changes
     switches = {}
     for w in wm.keys():
-        switches[w] = edge_changes(wm[w]['duration'], wm[w]['total'],
-                                   metrics_ts)
+        try:
+            switches[w] = edge_changes(wm[w]['duration'], wm[w]['total'],
+                                       metrics_ts)
+        except Exception as err:
+            print 'KeyError in wm[{}]: {}'.format(w, wm[w])
+            raise err
     return switches
 
 
@@ -208,17 +213,6 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
     joiners = join_count
     res_dir = '/tmp/res-data'
     expect = 2000 * cycles
-
-    patterns_i = ([re.escape(r'***Worker worker{} attempting to join the '
-                             r'cluster. Sent necessary information.***'
-                             .format(i)) for i in range(1, joiners + 1)]
-                  +
-                  [re.escape(r'Migrating partitions to worker1'),
-                   re.escape(r'--All new workers have acked migration '
-                             r'batch complete'),
-                   re.escape(r'~~~Resuming message processing.~~~')])
-    patterns_w = [re.escape(r'***Successfully joined cluster!***'),
-                  re.escape(r'~~~Resuming message processing.~~~')]
 
     setup_resilience_path(res_dir)
 
@@ -274,6 +268,7 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
         sender.start()
 
         # Perform grow cycles
+        start_from_i = 0
         for cyc in range(cycles):
             joined = []
                 # create a new worker and have it join
@@ -281,16 +276,33 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
                                         base_port=25000)
             joiner_ports = zip(new_ports[::2], new_ports[1::2])
             for i in range(joiners):
-                add_runner(runners, command, host, inputs, outputs, metrics_port,
+                add_runner(runners, command, host, inputs, outputs,
+                           metrics_port,
                            control_port, external_port, data_port, res_dir,
                            joiners, *joiner_ports[i])
-                joined.append(runners[-1].name)
+                joined.append(runners[-1])
+
+            patterns_i = ([re.escape(r'***Worker {} attempting to join the '
+                                     r'cluster. Sent necessary information.***'
+                                     .format(r.name)) for r in joined]
+                          +
+                          [re.escape(r'Migrating partitions to {}'.format(
+                              r.name)) for r in joined]
+                          +
+                          [re.escape(r'--All new workers have acked migration '
+                                     r'batch complete'),
+                           re.escape(r'~~~Resuming message processing.~~~')])
+            patterns_j = [re.escape(r'***Successfully joined cluster!***'),
+                          re.escape(r'~~~Resuming message processing.~~~')]
 
             # Wait for runner to complete a joining
             join_checkers = []
-            join_checkers.append(RunnerChecker(runners[0], patterns_i, timeout=30))
-            for runner in runners[1:]:
-                join_checkers.append(RunnerChecker(runner, patterns_w, timeout=30))
+            join_checkers.append(RunnerChecker(runners[0], patterns_i,
+                                               timeout=30,
+                                               start_from=start_from_i))
+            for runner in joined:
+                join_checkers.append(RunnerChecker(runner, patterns_j,
+                                                   timeout=30))
             for jc in join_checkers:
                 jc.start()
             for jc in join_checkers:
@@ -298,6 +310,7 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
                 if jc.error:
                     print('RunnerChecker error for Join check on {}'
                           .format(jc.runner_name))
+                    print jc.error
 
                     outputs = [(r.name, r.get_output()) for r in runners]
                     outputs = '\n===\n'.join(('\n---\n'.join(t) for t in outputs))
@@ -306,11 +319,13 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
                         'seconds. The cluster had the following outputs:\n===\n{}'
                         .format(jc.runner_name, jc.timeout, outputs))
 
+            start_from_i = runners[0].tell()
             # wait for there to be metrics for the worker
-            time.sleep(5)
+            time.sleep(8.25)
 
             # validate new worker joined via metrics
-            phase_validate_metrics(runners, metrics, joined=joined)
+            phase_validate_metrics(runners, metrics, joined=[r.name for r in
+                                                             joined])
 
         # wait until sender completes (~10 seconds)
         sender.join(30)
