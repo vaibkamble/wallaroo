@@ -646,6 +646,12 @@ class Runner(threading.Thread):
         with open(self.file.name, 'rb') as ro:
             return ro.read()
 
+    def tell(self):
+        """
+        Return the STDOUT file's current position
+        """
+        return self.file.tell()
+
     def respawn(self):
         return Runner(self.cmd_string, self.name)
 
@@ -692,10 +698,11 @@ class RunnerReadyChecker(StoppableThread):
 class RunnerChecker(StoppableThread):
     __base_name__ = 'RunnerChecker'
 
-    def __init__(self, runner, patterns, timeout=30):
+    def __init__(self, runner, patterns, timeout=30, start_from=0):
         super(RunnerChecker, self).__init__()
         self.name = self.__base_name__
         self.runner_name = runner.name
+        self.start_from = start_from
         self._path = runner.file.name
         self.timeout = timeout
         self.error = None
@@ -707,7 +714,7 @@ class RunnerChecker(StoppableThread):
 
     def run(self):
         with open(self._path, 'rb') as r:
-            last_match = 0
+            last_match = self.start_from
             started = time.time()
             while not self.stopped():
                 r.seek(last_match)
@@ -721,7 +728,7 @@ class RunnerChecker(StoppableThread):
                         logging.debug('Pattern %r found in runner STDOUT.'
                                       % match.re.pattern)
                         self.compiled.pop(0)
-                        last_match = 0
+                        last_match = self.start_from
                         if self.compiled:
                             continue
                         self.stop()
