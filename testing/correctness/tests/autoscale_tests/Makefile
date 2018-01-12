@@ -40,6 +40,7 @@ CUSTOM_PYTHONPATH += $(TESTING_ALPHABET_PYTHON_PATH)
 build-testing-correctness-tests-autoscale_tests: build-testing-correctness-apps-sequence_window
 build-testing-correctness-tests-autoscale_tests: build-testing-correctness-apps-alphabet
 build-testing-correctness-tests-autoscale_tests: build-machida
+build-testing-correctness-tests-autoscale_tests: build-testing-tools-external_sender
 integration-tests-testing-correctness-tests-autoscale_tests: build-testing-correctness-tests-autoscale_tests
 integration-tests-testing-correctness-tests-autoscale_tests: autoscale_tests
 

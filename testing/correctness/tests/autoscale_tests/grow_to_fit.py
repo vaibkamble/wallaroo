@@ -65,31 +65,149 @@ def validate(raw_data, expected):
 
 def test_autoscale_grow_pony_by_1():
     command = 'alphabet'
-    _test_autoscale_grow(command, worker_count=2)
+    _test_autoscale_grow(command, join_count=1, cycles=5)
 
 
-def test_autoscale_grow_machida_by_1():
-    command = 'machida --application-module alphabet'
-    _test_autoscale_grow(command, worker_count=2)
+#def test_autoscale_grow_machida_by_1():
+#    command = 'machida --application-module alphabet'
+#    _test_autoscale_grow(command, join_count=1)
 
 
-def test_autoscale_grow_pony_by_4():
-    command = 'alphabet'
-    _test_autoscale_grow(command, worker_count=5)
+#def test_autoscale_grow_pony_by_4():
+#    command = 'alphabet'
+#    _test_autoscale_grow(command, join_count=5, cycles=3)
 
 
-def test_autoscale_grow_machida_by_4():
-    command = 'machida --application-module alphabet'
-    _test_autoscale_grow(command, worker_count=5)
+#def test_autoscale_grow_machida_by_4():
+#    command = 'machida --application-module alphabet'
+#    _test_autoscale_grow(command, join_count=4)
 
 
-def _test_autoscale_grow(command, worker_count=1):
+def send_shrink_cmd(host, port, names=[], count=1):
+    # Trigger log rotation with external message
+    cmd_external_trigger = ('external_sender --external {}:{} --type shrink '
+                            '--message {}'
+                            .format(host, port,
+                                    ','.join(names) if names else count))
+
+    success, stdout, retcode, cmd = ex_validate(cmd_external_trigger)
+    try:
+        assert(success)
+    except AssertionError:
+        raise AssertionError('External shrink trigger failed with '
+                             'the error:\n{}'.format(stdout))
+
+
+def phase_validate_output(runners, sink, expected):
+    # Validate captured output
+    try:
+        validate(sink.data, expected)
+    except AssertionError:
+        outputs = [(r.name, r.get_output()) for r in runners]
+        outputs = '\n===\n'.join(('\n---\n'.join(t) for t in outputs))
+        raise AssertionError('Validation failed on expected output. '
+                             'Worker outputs are included below:'
+                             '\n===\n{}'.format(outputs))
+
+
+def edge_changes(duration, totals, metrics_ts):
+    """
+    Construct a sequence of high-to-low and low-to-high edge changes
+    representing a switch from non-zero to zero total values and vice versa.
+    """
+    # the first switch is low-to-high by definition (if totals is not empty)
+    switches = []
+    if not totals:
+        return switches
+    switches.append((totals[0][0], 'up'))
+    for ts, tot in totals[1:]:
+        if ts - switches[-1][0] > duration:
+            if switches[-1][1] == 'up':
+                # add a 'down' switch after the last switch
+                switches.append((switches[-1][0] + duration, 'down'))
+                # add an 'up' switch at the current ts
+                switches.append((ts, 'up'))
+    # Since the last switch is always up, we can always add a 'down' in the
+    # ts that follows it
+    if metrics_ts > switches[-1][0] + duration:
+        switches.append((switches[-1][0] + duration, 'down'))
+    return switches
+
+
+def parse_metrics(metrics):
+    # parse metrics data and validate worker has shifted from 1 to 2
+    # workers
+    mp = MetricsParser()
+    mp.load_string_list(metrics.data)
+    metrics_ts = int(time.time() * 1e9)
+    mp.parse()
+    # Now confirm that there are computations in each worker's metrics
+    app_key = mp.data.keys()[0]  # 'metrics:Alphabet Poplarity Contest'
+    names = mp.data[app_key].keys()  # this includes 'initializer'
+    # For each worker, get a metrics duration value, and a list of
+    # (end_ts, node_ingress_egress totals) pairs
+    wm = {k: {'total': {}} for k in names}
+    for w in names:
+        for t in mp.data[app_key][w]:
+            if (t[0] == 'metrics' and
+                t[1]['metric_category'] == 'node-ingress-egress'):
+                    wm[w]['duration'] = t[1]['duration']
+                    wm[w]['total'][t[1]['end_ts']] = (
+                        wm[w]['total'].get(t[1]['end_ts'], 0) + t[1]['total'])
+
+    # Sort the totals
+    for w in wm.keys():
+        wm[w]['total'] = sorted(wm[w]['total'].items(), key=lambda x: x[0])
+
+    # Get sequence of edge changes
+    switches = {}
+    for w in wm.keys():
+        switches[w] = edge_changes(wm[w]['duration'], wm[w]['total'],
+                                   metrics_ts)
+    return switches
+
+
+def phase_validate_metrics(runners, metrics, joined=[], left=[]):
+    # Verify there is at least one entry for a computation with a nonzero
+    # total value
+    wm = parse_metrics(metrics)
+    print 'joined', joined
+    print 'left', left
+    print 'worker_metrics'
+    print '==='
+    for w in wm:
+        print w
+        print '---'
+        print wm[w]
+        print '='
+    print
+    for w in joined:
+        try:
+            assert(wm[w][-1][1] == 'up')
+        except AssertionError:
+            outputs = [(r.name, r.get_output()) for r in runners]
+            outputs = '\n===\n'.join(('\n---\n'.join(t) for t in outputs))
+            raise AssertionError('{} does not appear to have joined! '
+                                 'Worker outputs are included below:'
+                                 '\n===\n{}'.format(w, outputs))
+    for w in left:
+        try:
+            assert(wm[w][-1][1] == 'down')
+        except AssertionError:
+            outputs = [(r.name, r.get_output()) for r in runners]
+            outputs = '\n===\n'.join(('\n---\n'.join(t) for t in outputs))
+            raise AssertionError('{} does not appear to have left! '
+                                 'Worker outputs are included below:'
+                                 '\n===\n{}'.format(w, outputs))
+
+
+def _test_autoscale_grow(command, join_count=1, cycles=1):
     host = '127.0.0.1'
     sources = 1
     workers = 1
-    joiners = worker_count - workers
+    joiners = join_count
     res_dir = '/tmp/res-data'
-    expect = 2000
+    expect = 2000 * cycles
 
     patterns_i = ([re.escape(r'***Worker worker{} attempting to join the '
                              r'cluster. Sent necessary information.***'
@@ -111,13 +229,10 @@ def _test_autoscale_grow(command, worker_count=1):
         metrics = Metrics(host)
 
         char_gen = cycle(lowercase)
-        char_1000 = [next(char_gen) for i in range(1000)]
-        char_2000 = [next(char_gen) for i in range(1000)]
-        expected = Counter(char_1000 + char_2000)
+        chars = [next(char_gen) for i in range(expect)]
+        expected = Counter(chars)
 
-        reader1 = Reader(iter_generator(char_1000,
-                                        lambda s: pack('>sI', s, 1)))
-        reader2 = Reader(iter_generator(char_2000,
+        reader = Reader(iter_generator(chars,
                                         lambda s: pack('>sI', s, 1)))
 
         await_values = [pack('>IsQ', 9, c, v) for c, v in
@@ -153,63 +268,61 @@ def _test_autoscale_grow(command, worker_count=1):
         if runner_ready_checker.error:
             raise runner_ready_checker.error
 
-        # start sender1
-        sender1 = Sender(host, input_ports[0], reader1, batch_size=10,
+        # start sender
+        sender = Sender(host, input_ports[0], reader, batch_size=10,
                         interval=0.05)
-        sender1.start()
+        sender.start()
 
-        # wait until sender1 completes (~5 seconds)
-        sender1.join(30)
-        if sender1.error:
-            raise sender1.error
-        if sender1.is_alive():
-            sender1.stop()
-            raise TimeoutError('Sender1 did not complete in the expected '
+        # Perform grow cycles
+        for cyc in range(cycles):
+            joined = []
+                # create a new worker and have it join
+            new_ports = get_port_values(num=(joiners * 2), host=host,
+                                        base_port=25000)
+            joiner_ports = zip(new_ports[::2], new_ports[1::2])
+            for i in range(joiners):
+                add_runner(runners, command, host, inputs, outputs, metrics_port,
+                           control_port, external_port, data_port, res_dir,
+                           joiners, *joiner_ports[i])
+                joined.append(runners[-1].name)
+
+            # Wait for runner to complete a joining
+            join_checkers = []
+            join_checkers.append(RunnerChecker(runners[0], patterns_i, timeout=30))
+            for runner in runners[1:]:
+                join_checkers.append(RunnerChecker(runner, patterns_w, timeout=30))
+            for jc in join_checkers:
+                jc.start()
+            for jc in join_checkers:
+                jc.join()
+                if jc.error:
+                    print('RunnerChecker error for Join check on {}'
+                          .format(jc.runner_name))
+
+                    outputs = [(r.name, r.get_output()) for r in runners]
+                    outputs = '\n===\n'.join(('\n---\n'.join(t) for t in outputs))
+                    raise TimeoutError(
+                        'Worker {} join timed out in {} '
+                        'seconds. The cluster had the following outputs:\n===\n{}'
+                        .format(jc.runner_name, jc.timeout, outputs))
+
+            # wait for there to be metrics for the worker
+            time.sleep(5)
+
+            # validate new worker joined via metrics
+            phase_validate_metrics(runners, metrics, joined=joined)
+
+        # wait until sender completes (~10 seconds)
+        sender.join(30)
+        if sender.error:
+            raise sender.error
+        if sender.is_alive():
+            sender.stop()
+            raise TimeoutError('Sender did not complete in the expected '
                                'period')
 
-        # create a new worker and have it join
-        new_ports = get_port_values(num=(joiners * 2), host=host,
-                                    base_port=25000)
-        joiner_ports = zip(new_ports[::2], new_ports[1::2])
-        for i in range(joiners):
-            add_runner(runners, command, host, inputs, outputs, metrics_port,
-                       control_port, external_port, data_port, res_dir,
-                       joiners, *joiner_ports[i])
-
-        # Wait for runner to complete a log rotation
-        join_checkers = []
-        join_checkers.append(RunnerChecker(runners[0], patterns_i, timeout=30))
-        for runner in runners[1:]:
-            join_checkers.append(RunnerChecker(runner, patterns_w, timeout=30))
-        for jc in join_checkers:
-            jc.start()
-        for jc in join_checkers:
-            jc.join()
-            if jc.error:
-                print('RunnerChecker error for Join check on {}'
-                      .format(jc.runner_name))
-
-                outputs = [(r.name, r.get_output()) for r in runners]
-                outputs = '\n===\n'.join(('\n---\n'.join(t) for t in outputs))
-                raise TimeoutError(
-                    'Worker {} join timed out in {} '
-                    'seconds. The cluster had the following outputs:\n===\n{}'
-                    .format(jc.runner_name, jc.timeout, outputs))
-
-
-        # Start sender2
-        sender2 = Sender(host, input_ports[0], reader2, batch_size=10,
-                         interval=0.05)
-        sender2.start()
-
-        # wait until sender2 completes (~5 seconds)
-        sender2.join(30)
-        if sender2.error:
-            raise sender2.error
-        if sender2.is_alive():
-            sender2.stop()
-            raise TimeoutError('Sender2 did not complete in the expected '
-                               'period')
+        # Wait one full metrics period to ensure we get all the metrics
+        time.sleep(2.25)
 
         # Use Sink value to determine when to stop runners and sink
         stopper = SinkAwaitValue(sink, await_values, 30)
@@ -228,45 +341,12 @@ def _test_autoscale_grow(command, worker_count=1):
         # Stop metrics
         metrics.stop()
 
-        # parse metrics data and validate worker has shifted from 1 to 2
-        # workers
-        mp = MetricsParser()
-        mp.load_string_list(metrics.data)
-        mp.parse()
-        # Now confirm that there are computations in each worker's metrics
-        app_key = mp.data.keys()[0]  # 'metrics:Alphabet Poplarity Contest'
-        worker_metrics = {w: [v for v in mp.data[app_key].get(w, [])
-                                   if v[0] =='metrics']
-                          for w in ['worker{}'.format(i) for i in
-                                    range(1, joiners + 1)]}
-        # Verify there is at least one entry for a computation with a nonzero
-        # total value
-        for w, m in worker_metrics.items():
-            filtered = filter(lambda v: ((v[1]['metric_category'] ==
-                                          'computation')
-                                         and
-                                         v[1]['total'] > 0),
-                              m)
-            print('filtered', filtered)
-            try:
-                assert(len(filtered) > 0)
-            except AssertionError:
-                outputs = [(r.name, r.get_output()) for r in runners]
-                outputs = '\n===\n'.join(('\n---\n'.join(t) for t in outputs))
-                raise AssertionError('{} did not process any data! '
-                                     'Worker outputs are included below:'
-                                     '\n===\n{}'.format(w, outputs))
+        # validate all workers left via metrics
+        phase_validate_metrics(runners, metrics,
+                               left=set((r.name for r in runners)))
 
-
-        # Validate captured output
-        try:
-            validate(sink.data, expected)
-        except AssertionError:
-            outputs = [(r.name, r.get_output()) for r in runners]
-            outputs = '\n===\n'.join(('\n---\n'.join(t) for t in outputs))
-            raise AssertionError('Validation failed on expected output. '
-                                 'Worker outputs are included below:'
-                                 '\n===\n{}'.format(outputs))
+        # validate output
+        phase_validate_output(runners, sink, expected)
 
     finally:
         for r in runners:
