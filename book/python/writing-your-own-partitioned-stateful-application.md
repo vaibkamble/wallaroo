@@ -64,9 +64,6 @@ And since we changed the name of the state class from `AllVotes` to `TotalVotes`
 
 ```python
 class LetterStateBuilder(object):
-    def name(self):
-        return "Letter State Builder"
-
     def build(self):
         return TotalVotes()
 ```
