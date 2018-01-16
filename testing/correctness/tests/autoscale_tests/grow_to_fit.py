@@ -129,8 +129,10 @@ def edge_changes(duration, totals, metrics_ts):
                 switches.append((ts, 'up'))
     # Since the last switch is always up, we can always add a 'down' in the
     # ts that follows it if enough time has elapsed
-    if metrics_ts > switches[-1][0] + duration:
-        switches.append((switches[-1][0] + duration, 'down'))
+#    if metrics_ts > switches[-1][0] + duration:
+#        print 'adding down to the end because {} > {} + {}'.format(metrics_ts, switches[-1][0], duration)
+#        switches.append((switches[-1][0] + duration, 'down'))
+    print 'last ts in totals: ', switches[-1][0]
     return switches
 
 
@@ -139,7 +141,7 @@ def parse_metrics(metrics):
     # workers
     mp = MetricsParser()
     mp.load_string_list(metrics.data)
-    metrics_ts = int(time.time() * 1e9)
+    metrics_ts = time.time()
     print 'metrics_ts:', metrics_ts
     mp.parse()
     # Now confirm that there are computations in each worker's metrics
@@ -152,9 +154,15 @@ def parse_metrics(metrics):
         for t in mp.data[app_key][w]:
             if (t[0] == 'metrics' and
                 t[1]['metric_category'] == 'node-ingress-egress'):
-                    wm[w]['duration'] = t[1]['duration']
-                    wm[w]['total'][t[1]['end_ts']] = (
-                        wm[w]['total'].get(t[1]['end_ts'], 0) + t[1]['total'])
+                    wm[w]['duration'] = t[1]['duration'] / 1e9
+                    t_key = t[1]['end_ts'] / 1e9
+                    wm[w]['total'][t_key] = (
+                        wm[w]['total'].get(t_key, 0) + t[1]['total'])
+            elif w in ['worker4', 'worker5']:
+                print w, t[0]
+                if len(t) > 1:
+                    print t[1:]
+                print
 
     # Sort the totals
     for w in wm.keys():
@@ -164,6 +172,7 @@ def parse_metrics(metrics):
     switches = {}
     for w in wm.keys():
         try:
+            print 'constructing edge graph for {}'.format(w)
             switches[w] = edge_changes(wm[w]['duration'], wm[w]['total'],
                                        metrics_ts)
         except Exception as err:
@@ -221,15 +230,15 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
         # Create sink, metrics, reader, sender
         sink = Sink(host)
         metrics = Metrics(host)
-
-        char_gen = cycle(lowercase)
+        lowercase2 = [a + b for a in lowercase for b in lowercase]
+        char_gen = cycle(lowercase2)
         chars = [next(char_gen) for i in range(expect)]
         expected = Counter(chars)
 
         reader = Reader(iter_generator(chars,
                                         lambda s: pack('>sI', s, 1)))
 
-        await_values = [pack('>IsQ', 9, c, v) for c, v in
+        await_values = [pack('>I2sQ', 10, c, v) for c, v in
                         expected.items()]
 
         # Start sink and metrics, and get their connection info
@@ -324,8 +333,19 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
             time.sleep(8.25)
 
             # validate new worker joined via metrics
-            phase_validate_metrics(runners, metrics, joined=[r.name for r in
-                                                             joined])
+            try:
+                phase_validate_metrics(runners, metrics, joined=[r.name for r in
+                                                                 joined])
+            except Exception as err:
+                print 'error validating [{}] have joined'.format([r.name for r in joined])
+                print 'their outputs are included below:'
+                for r in [runners[0]] + joined:
+                    print '==='
+                    print r.name
+                    print '---'
+                    print r.get_output()
+                print
+                raise err
 
         # wait until sender completes (~10 seconds)
         sender.join(30)
@@ -337,7 +357,7 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
                                'period')
 
         # Wait one full metrics period to ensure we get all the metrics
-        time.sleep(2.25)
+        time.sleep(4.25)
 
         # Use Sink value to determine when to stop runners and sink
         stopper = SinkAwaitValue(sink, await_values, 30)
@@ -357,8 +377,8 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
         metrics.stop()
 
         # validate all workers left via metrics
-        phase_validate_metrics(runners, metrics,
-                               left=set((r.name for r in runners)))
+        #phase_validate_metrics(runners, metrics,
+        #                       left=set((r.name for r in runners)))
 
         # validate output
         phase_validate_output(runners, sink, expected)
@@ -366,3 +386,5 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
     finally:
         for r in runners:
             r.stop()
+
+    assert(0)
