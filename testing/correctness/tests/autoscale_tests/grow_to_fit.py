@@ -39,7 +39,7 @@ import re
 import time
 
 
-fmt = '>LsQ'
+fmt = '>I2sQ'
 def decode(bs):
     return unpack(fmt, bs)[1:3]
 
@@ -65,7 +65,7 @@ def validate(raw_data, expected):
 
 def test_autoscale_grow_pony_by_1():
     command = 'alphabet'
-    _test_autoscale_grow(command, join_count=1, cycles=5)
+    _test_autoscale_grow(command, join_count=1, cycles=12)
 
 
 #def test_autoscale_grow_machida_by_1():
@@ -221,7 +221,9 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
     workers = 1
     joiners = join_count
     res_dir = '/tmp/res-data'
-    expect = 2000 * cycles
+    base = 1000
+    expect = base + (2000 * cycles)
+    sender_timeout = expect/200 + 10
 
     setup_resilience_path(res_dir)
 
@@ -236,7 +238,7 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
         expected = Counter(chars)
 
         reader = Reader(iter_generator(chars,
-                                        lambda s: pack('>sI', s, 1)))
+                                        lambda s: pack('>2sI', s, 1)))
 
         await_values = [pack('>I2sQ', 10, c, v) for c, v in
                         expected.items()]
@@ -348,7 +350,7 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
                 raise err
 
         # wait until sender completes (~10 seconds)
-        sender.join(30)
+        sender.join(sender_timeout)
         if sender.error:
             raise sender.error
         if sender.is_alive():
@@ -364,6 +366,8 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
         stopper.start()
         stopper.join()
         if stopper.error:
+            print 'sink.data', len(sink.data)
+            print 'await_values', len(await_values)
             raise stopper.error
 
         # stop application workers
@@ -386,5 +390,3 @@ def _test_autoscale_grow(command, join_count=1, cycles=1):
     finally:
         for r in runners:
             r.stop()
-
-    assert(0)
