@@ -114,7 +114,11 @@ install_monitoring_hub_dependencies() {
   sudo apt-key add erlang_solutions.asc
   popd
   sudo apt-get update
-  sudo apt-get -fy install esl-erlang=$OTP_VERSION elixir=$ELIXIR_VERSION
+  sudo apt-get -fy install erlang-base=$OTP_VERSION erlang-dev=$OTP_VERSION \
+    erlang-parsetools=$OTP_VERSION erlang-eunit=$OTP_VERSION erlang-crypto=$OTP_VERSION \
+    erlang-syntax-tools=$OTP_VERSION erlang-asn1=$OTP_VERSION erlang-public-key=$OTP_VERSION \
+    erlang-ssl=$OTP_VERSION erlang-mnesia=$OTP_VERSION erlang-runtime-tools=$OTP_VERSION \
+    erlang-inets=$OTP_VERSION elixir=$ELIXIR_VERSION
 
   echo "** Monitoring hub dependencies installed"
 }
