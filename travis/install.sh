@@ -119,6 +119,7 @@ install_monitoring_hub_dependencies() {
     erlang-syntax-tools=$OTP_VERSION erlang-asn1=$OTP_VERSION erlang-public-key=$OTP_VERSION \
     erlang-ssl=$OTP_VERSION erlang-mnesia=$OTP_VERSION erlang-runtime-tools=$OTP_VERSION \
     erlang-inets=$OTP_VERSION elixir=$ELIXIR_VERSION
+  kiex implode
 
   echo "** Monitoring hub dependencies installed"
 }
