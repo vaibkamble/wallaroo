@@ -41,7 +41,7 @@ defmodule MetricsReporter.LatencyStatsCalculator do
   def calculate_latency_percentile_bin_stats(cumalative_latency_percentage_bins_msg) do
     sorted_bin_keys = Map.keys(cumalative_latency_percentage_bins_msg)
       |> Enum.sort(&(String.to_integer(&1)< String.to_integer(&2)))
-    _latency_percent_bin_stats = get_percentiles
+    _latency_percent_bin_stats = get_percentiles()
       |> Enum.reduce(%{}, fn percentile, percentile_map ->
         bin = Enum.reduce_while(sorted_bin_keys, 0, fn bin, _acc ->
           percentage_at_bin = cumalative_latency_percentage_bins_msg[bin]
